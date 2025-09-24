@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -174,9 +175,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # هنا يمكنك إضافة منطق ربط الملف بمادة معينة
     await update.message.reply_text("تم استلام الملف. (الربط بالمادة: قيد التطوير)")
 
-# === تشغيل البوت في خيط منفصل لدمج البوت مع Streamlit ===
+# === تشغيل البوت في خيط منفصل مع إدارة event loop ===
 def run_bot():
     init_db()
+
+    # إعداد event loop يدويًا
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -186,7 +192,7 @@ def run_bot():
 
     logger.info("🚀 بدء البوت في الخيط الخلفي...")
     try:
-        app.run_polling(stop_signals=None)
+        loop.run_until_complete(app.run_polling(stop_signals=None))
     except Exception as e:
         logger.error(f"خطأ في تشغيل البوت: {e}")
 
