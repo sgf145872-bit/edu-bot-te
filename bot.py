@@ -309,17 +309,6 @@ def run_bot():
         loop.run_until_complete(app.run_polling(stop_signals=None))
     except Exception as e:
         logger.error(f"خطأ في تشغيل البوت: {e}")
-
-# === التشغيل التلقائي على Streamlit ===
-if "streamlit" in sys.modules:
-    # ---
-    # Only start the bot thread if it hasn't been started yet
-    if not bot_thread_started:
-        bot_thread = threading.Thread(target=run_bot, daemon=True)
-        bot_thread.start()
-        bot_thread_started = True # Set the flag to True
-        logger.info("✅ البوت يعمل في الخلفية على Streamlit.")
-    # ---
-else:
+        
     if __name__ == "__main__":
         run_bot()
