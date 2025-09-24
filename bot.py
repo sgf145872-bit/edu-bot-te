@@ -1,4 +1,3 @@
-# bot.py
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from telegram.ext import (
 )
 from database import init_db
 import config
+import streamlit as st
 
 # === إعداد التسجيل ===
 logging.basicConfig(level=logging.INFO)
@@ -174,7 +174,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # هنا يمكنك إضافة منطق ربط الملف بمادة معينة
     await update.message.reply_text("تم استلام الملف. (الربط بالمادة: قيد التطوير)")
 
-# === تشغيل البوت في خيط منفصل ===
+# === تشغيل البوت في خيط منفصل لدمج البوت مع Streamlit ===
 def run_bot():
     init_db()
     app = Application.builder().token(config.BOT_TOKEN).build()
