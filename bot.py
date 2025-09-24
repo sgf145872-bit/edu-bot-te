@@ -6,7 +6,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
+    MessageHandler, filters, ContextTypes, ConversationHandler
 )
 from database import init_db, manage_courses, manage_years, manage_users
 import config
@@ -44,21 +44,20 @@ def register_user(user_id, username):
     conn.execute("UPDATE stats SET value = (SELECT COUNT(*) FROM users) WHERE stat_name = 'total_users'")
     conn.commit()
     conn.close()
-    
-# دالة جديدة للحصول على رابط الدعوة
-async def get_invite_link(bot, chat_id):
-    try:
-        chat = await bot.get_chat(chat_id)
-        if chat.username:
-            # إذا كانت القناة عامة، استخدم اسم المستخدم
-            return f"https://t.me/{chat.username}"
-        else:
-            # إذا كانت القناة خاصة، أنشئ رابط دعوة
-            invite_link_obj = await bot.create_chat_invite_link(chat_id)
-            return invite_link_obj.invite_link
-    except Exception as e:
-        logger.error(f"Failed to get invite link for {chat_id}: {e}")
-        return None
+
+# دالة للتحقق من انضمام المستخدم للقنوات
+async def check_all_channels(user_id, bot):
+    # وظيفة مؤقتة، يمكنك استبدالها بوظيفة التحقق الحقيقية
+    return True
+
+# دالة للتعامل مع المستندات
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # وظيفة مؤقتة
+    await update.message.reply_text("تم استلام المستند.")
+
+# === حالات المحادثة ===
+ADD_COURSE_STATE, REMOVE_COURSE_STATE, ADD_YEAR_STATE, REMOVE_YEAR_STATE, BAN_USER_STATE = range(5)
+waiting_for_input = {}
 
 # === المعالجات ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,21 +70,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     register_user(user_id, update.effective_user.username)
 
-    # تحقق من القنوات المطلوبة
     if config.REQUIRED_CHANNELS and user_id not in config.ADMIN_IDS:
         if not await check_all_channels(user_id, context.bot):
             buttons = []
             for ch in config.REQUIRED_CHANNELS:
-                invite_url = await get_invite_link(context.bot, ch)
-                if invite_url:
-                    try:
-                        chat = await context.bot.get_chat(ch)
-                        buttons.append([InlineKeyboardButton(f"الانضمام إلى {chat.title}", url=invite_url)])
-                    except:
-                        buttons.append([InlineKeyboardButton("القناة", url=invite_url)])
-                else:
-                    buttons.append([InlineKeyboardButton("القناة (رابط غير متاح)", url="https://t.me/")])
-
+                try:
+                    chat = await context.bot.get_chat(ch)
+                    url = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/c/{str(ch).lstrip('-100')}"
+                    buttons.append([InlineKeyboardButton(f"الانضمام إلى {chat.title}", url=url)])
+                except:
+                    buttons.append([InlineKeyboardButton("القناة", url=f"https://t.me/c/{str(ch).lstrip('-100')}")])
             buttons.append([InlineKeyboardButton("✅ تحققت من الانضمام", callback_data="check_channels")])
             await update.message.reply_text(
                 "يرجى الانضمام إلى جميع القنوات التالية لتفعيل البوت:",
@@ -99,8 +93,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not years:
         await update.message.reply_text("لا توجد سنوات دراسية مضافة بعد.")
         return
+    
     keyboard = [[InlineKeyboardButton(y['name'], callback_data=f"year_{y['year_id']}")] for y in years]
     keyboard.append([InlineKeyboardButton("📊 الإحصائيات", callback_data="stats")])
+
+    # إضافة زر لوحة التحكم الإدارية للمديرين فقط
+    if user_id in config.ADMIN_IDS:
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المدير", callback_data="admin_panel")])
+    
     await update.message.reply_text("اختر السنة الدراسية:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,7 +108,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
-
+    
+    # التحقق من صلاحيات المدير
+    if data.startswith("admin_") and user_id not in config.ADMIN_IDS:
+        await query.message.reply_text("ليس لديك صلاحية الوصول إلى هذه الوظيفة.")
+        return
+    
+    # إدارة القنوات
     if data == "check_channels":
         if await check_all_channels(user_id, context.bot):
             await query.message.edit_text("شكرًا! يمكنك الآن استخدام البوت.")
@@ -117,6 +123,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("لم تنضم إلى جميع القنوات بعد!")
         return
 
+    # الإحصائيات
     if data == "stats":
         conn = get_db_connection()
         total = conn.execute("SELECT value FROM stats WHERE stat_name = 'total_users'").fetchone()
@@ -125,94 +132,116 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, parse_mode="Markdown")
         return
 
+    # لوحة تحكم المدير
     if data == "admin_panel":
-        # عرض لوحة تحكم إدارية لأوامر مثل إضافة وحذف المواد
-        await query.message.edit_text("إليك لوحة التحكم الإدارية.", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 إضافة مادة", callback_data="add_course")],
-            [InlineKeyboardButton("🗑️ حذف مادة", callback_data="remove_course")],
-            [InlineKeyboardButton("📝 إضافة سنة دراسية", callback_data="add_year")],
-            [InlineKeyboardButton("🗑️ حذف سنة دراسية", callback_data="remove_year")],
-            [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="ban_user")],
-            [InlineKeyboardButton("👥 عرض المستخدمين", callback_data="view_users")],
+        await query.message.edit_text("مرحباً أيها المدير! اختر من القائمة:", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 إضافة مادة", callback_data="admin_add_course"), InlineKeyboardButton("🗑️ حذف مادة", callback_data="admin_remove_course")],
+            [InlineKeyboardButton("📝 إضافة سنة دراسية", callback_data="admin_add_year"), InlineKeyboardButton("🗑️ حذف سنة دراسية", callback_data="admin_remove_year")],
+            [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="admin_ban_user"), InlineKeyboardButton("👥 عرض المستخدمين", callback_data="admin_view_users")],
         ]))
         return
 
-    if data == "add_course":
+    # أوامر إضافة وحذف
+    if data == "admin_add_course":
+        waiting_for_input[user_id] = "add_course"
         await query.message.edit_text("أرسل اسم المادة التي تريد إضافتها.")
         return
 
-    if data == "remove_course":
+    if data == "admin_remove_course":
         conn = get_db_connection()
         courses = conn.execute("SELECT * FROM courses").fetchall()
         conn.close()
-        buttons = [
-            [InlineKeyboardButton(course['name'], callback_data=f"remove_course_{course['course_id']}")]
-            for course in courses
-        ]
+        buttons = [[InlineKeyboardButton(c['name'], callback_data=f"remove_course_{c['course_id']}")] for c in courses]
+        buttons.append([InlineKeyboardButton("إلغاء", callback_data="cancel")])
         await query.message.edit_text("اختر المادة التي تريد حذفها:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if data == "add_year":
+    if data == "admin_add_year":
+        waiting_for_input[user_id] = "add_year"
         await query.message.edit_text("أرسل اسم السنة الدراسية التي تريد إضافتها.")
         return
 
-    if data == "remove_year":
+    if data == "admin_remove_year":
         conn = get_db_connection()
         years = conn.execute("SELECT * FROM years").fetchall()
         conn.close()
-        buttons = [
-            [InlineKeyboardButton(year['name'], callback_data=f"remove_year_{year['year_id']}")]
-            for year in years
-        ]
+        buttons = [[InlineKeyboardButton(y['name'], callback_data=f"remove_year_{y['year_id']}")] for y in years]
+        buttons.append([InlineKeyboardButton("إلغاء", callback_data="cancel")])
         await query.message.edit_text("اختر السنة الدراسية التي تريد حذفها:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if data == "ban_user":
+    if data == "admin_ban_user":
+        waiting_for_input[user_id] = "ban_user"
         await query.message.edit_text("أرسل معرف المستخدم الذي تريد حظره.")
         return
 
-    if data == "view_users":
+    if data == "admin_view_users":
         conn = get_db_connection()
-        users = conn.execute("SELECT * FROM users").fetchall()
+        users = conn.execute("SELECT user_id, username, is_banned FROM users").fetchall()
         conn.close()
-        text = "\n".join([f"@{user['username']}" for user in users])
-        await query.message.edit_text(f"المستخدمون الحاليون:\n{text}")
+        if not users:
+            await query.message.edit_text("لا يوجد مستخدمون حالياً.")
+            return
+
+        user_list = "\n".join([f"@{u['username']} (ID: {u['user_id']}) - {'محظور' if u['is_banned'] else 'نشط'}" for u in users])
+        await query.message.edit_text(f"المستخدمون الحاليون:\n\n{user_list}")
         return
 
-    # حذف مادة أو سنة دراسية
+    # تنفيذ أوامر الحذف
     if data.startswith("remove_course_"):
         course_id = int(data.split("_")[2])
-        manage_courses(course_id, action="remove")
+        manage_courses(course_id=course_id, action="remove")
         await query.message.edit_text("تم حذف المادة بنجاح.")
         return
 
     if data.startswith("remove_year_"):
         year_id = int(data.split("_")[2])
-        manage_years(year_id, action="remove")
+        manage_years(year_id=year_id, action="remove")
         await query.message.edit_text("تم حذف السنة الدراسية بنجاح.")
         return
-
-    # حظر المستخدم
-    if data == "ban_user":
-        user_id = int(data.split("_")[2])
-        manage_users(user_id, action="ban")
-        await query.message.edit_text(f"تم حظر المستخدم @ {user_id}.")
+        
+    if data == "cancel":
+        waiting_for_input.pop(user_id, None)
+        await query.message.edit_text("تم إلغاء العملية.")
         return
+
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in config.ADMIN_IDS or user_id not in waiting_for_input:
+        return
+    
+    message_text = update.message.text
+    action = waiting_for_input.pop(user_id)
+
+    if action == "add_course":
+        manage_courses(course_name=message_text, action="add")
+        await update.message.reply_text(f"تم إضافة المادة '{message_text}' بنجاح.")
+    
+    elif action == "add_year":
+        manage_years(year_name=message_text, action="add")
+        await update.message.reply_text(f"تم إضافة السنة الدراسية '{message_text}' بنجاح.")
+
+    elif action == "ban_user":
+        try:
+            user_to_ban_id = int(message_text)
+            manage_users(user_id=user_to_ban_id, action="ban")
+            await update.message.reply_text(f"تم حظر المستخدم ذي المعرف '{user_to_ban_id}' بنجاح.")
+        except ValueError:
+            await update.message.reply_text("معرف المستخدم يجب أن يكون رقماً. يرجى المحاولة مرة أخرى.")
 
 # === تشغيل البوت في خيط منفصل مع إدارة event loop ===
 def run_bot():
     init_db()
 
-    # إعداد event loop يدويًا
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", button_handler))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_admin_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     logger.info("🚀 بدء البوت في الخيط الخلفي...")
     try:
