@@ -44,6 +44,21 @@ def register_user(user_id, username):
     conn.execute("UPDATE stats SET value = (SELECT COUNT(*) FROM users) WHERE stat_name = 'total_users'")
     conn.commit()
     conn.close()
+    
+# دالة جديدة للحصول على رابط الدعوة
+async def get_invite_link(bot, chat_id):
+    try:
+        chat = await bot.get_chat(chat_id)
+        if chat.username:
+            # إذا كانت القناة عامة، استخدم اسم المستخدم
+            return f"https://t.me/{chat.username}"
+        else:
+            # إذا كانت القناة خاصة، أنشئ رابط دعوة
+            invite_link_obj = await bot.create_chat_invite_link(chat_id)
+            return invite_link_obj.invite_link
+    except Exception as e:
+        logger.error(f"Failed to get invite link for {chat_id}: {e}")
+        return None
 
 # === المعالجات ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,12 +76,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await check_all_channels(user_id, context.bot):
             buttons = []
             for ch in config.REQUIRED_CHANNELS:
-                try:
-                    chat = await context.bot.get_chat(ch)
-                    url = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/c/{str(ch).lstrip('-100')}"
-                    buttons.append([InlineKeyboardButton(f"الانضمام إلى {chat.title}", url=url)])
-                except:
-                    buttons.append([InlineKeyboardButton("القناة", url=f"https://t.me/c/{str(ch).lstrip('-100')}")])
+                invite_url = await get_invite_link(context.bot, ch)
+                if invite_url:
+                    try:
+                        chat = await context.bot.get_chat(ch)
+                        buttons.append([InlineKeyboardButton(f"الانضمام إلى {chat.title}", url=invite_url)])
+                    except:
+                        buttons.append([InlineKeyboardButton("القناة", url=invite_url)])
+                else:
+                    buttons.append([InlineKeyboardButton("القناة (رابط غير متاح)", url="https://t.me/")])
+
             buttons.append([InlineKeyboardButton("✅ تحققت من الانضمام", callback_data="check_channels")])
             await update.message.reply_text(
                 "يرجى الانضمام إلى جميع القنوات التالية لتفعيل البوت:",
@@ -209,3 +228,4 @@ if "streamlit" in sys.modules:
 else:
     if __name__ == "__main__":
         run_bot()
+
