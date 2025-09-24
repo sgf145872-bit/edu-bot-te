@@ -8,9 +8,13 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
+# تأكد من وجود ملف database.py في نفس المسار
 from database import init_db, manage_courses, manage_years, manage_users
-import config
-import streamlit as st
+# تأكد من وجود ملف config.py معدّل
+import config 
+
+# --- حذف استيراد Streamlit ---
+# import streamlit as st # تم الحذف
 
 # === إعداد التسجيل ===
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +23,8 @@ logger = logging.getLogger(__name__)
 # === دوال مساعدة ===
 def get_db_connection():
     import sqlite3
+    # ملاحظة: عند استخدام Koyeb، قد تحتاج إلى تثبيت قاعدة بيانات خارجية (PostgreSQL/MySQL) 
+    # واستبدال SQLite لتجنب فقدان البيانات عند إعادة تشغيل الحاوية.
     conn = sqlite3.connect('university.db')
     conn.row_factory = sqlite3.Row
     return conn
@@ -47,11 +53,13 @@ def register_user(user_id, username):
 
 # دالة للتحقق من انضمام المستخدم للقنوات
 async def check_all_channels(user_id, bot):
-    return True # وظيفة مؤقتة
+    # تبقى وظيفة مؤقتة
+    return True 
 
 # دالة للتعامل مع المستندات
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("تم استلام المستند.") # وظيفة مؤقتة
+    # تبقى وظيفة مؤقتة
+    await update.message.reply_text("تم استلام المستند.") 
 
 async def get_invite_link(bot, chat_id):
     try:
@@ -69,7 +77,7 @@ async def get_invite_link(bot, chat_id):
 ADD_COURSE_STATE, REMOVE_COURSE_STATE, ADD_YEAR_STATE, REMOVE_YEAR_STATE, BAN_USER_STATE = range(5)
 waiting_for_input = {}
 
-# === المعالجات ===
+# === المعالجات (تم الإبقاء عليها كما هي، تعتمد على الدوال المساعدة و config) ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_bot_enabled():
@@ -83,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if config.REQUIRED_CHANNELS and user_id not in config.ADMIN_IDS:
         if not await check_all_channels(user_id, context.bot):
             buttons = []
-            for ch in config.REQUIRED_CHANNELS:
+            for ch in config.REQUIRED_CHepos:
                 try:
                     chat = await context.bot.get_chat(ch)
                     url = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/c/{str(ch).lstrip('-100')}"
@@ -112,26 +120,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("اختر السنة الدراسية:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# إضافة معالج جديد لأمر /admin
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # التحقق من صلاحية المدير
     if user_id not in config.ADMIN_IDS:
         await update.message.reply_text("❌ ليس لديك صلاحية الوصول إلى هذا الأمر.")
         return
     
-    # التحقق من حالة البوت
     if not is_bot_enabled():
         await update.message.reply_text("البوت معطل حاليًا من قبل الإدارة.")
         return
     
-    # التحقق من الحظر
     if is_user_banned(user_id):
         await update.message.reply_text("لقد تم حظرك من استخدام هذا البوت.")
         return
     
-    # عرض لوحة تحكم المدير
     await update.message.reply_text(
         "مرحباً أيها المدير! اختر من القائمة:",
         reply_markup=InlineKeyboardMarkup([
@@ -151,7 +154,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
     
-    # التحقق من صلاحية المدير للأوامر الإدارية
     if data.startswith("admin_") and user_id not in config.ADMIN_IDS:
         await query.message.edit_text("❌ ليس لديك صلاحية الوصول إلى هذه الوظيفة.")
         return
@@ -261,7 +263,6 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     message_text = update.message.text
     
-    # التحقق من أن المستخدم مدير وأنه في وضع انتظار إدخال
     if user_id not in config.ADMIN_IDS or user_id not in waiting_for_input:
         return
     
@@ -283,32 +284,36 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await update.message.reply_text("❌ معرف المستخدم يجب أن يكون رقماً. يرجى المحاولة مرة أخرى.")
 
-# ---
-# A global flag to ensure the bot thread runs only once
-bot_thread_started = False
-# ---
+# --- تم حذف متغير bot_thread_started لعدم الحاجة إليه ---
 
-# === تشغيل البوت في خيط منفصل مع إدارة event loop ===
+# === تشغيل البوت في event loop ===
 def run_bot():
+    # تأكد من أن قاعدة البيانات تبدأ
     init_db()
 
+    # استخدام event loop جديد لأننا خارج بيئة Streamlit
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # استخدام config.BOT_TOKEN الذي سيتم قراءته من os.environ
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     # إضافة المعالجات
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin_command))  # إضافة معالج جديد لأمر /admin
+    app.add_handler(CommandHandler("admin", admin_command))  
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_admin_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    logger.info("🚀 بدء البوت في الخيط الخلفي...")
+    logger.info("🚀 بدء البوت في وضع التشغيل المستمر (Polling)...")
     try:
+        # تشغيل البوت في وضع Polling، وهو النموذج الأنسب للخوادم التي لا تستخدم Webhooks
         loop.run_until_complete(app.run_polling(stop_signals=None))
     except Exception as e:
         logger.error(f"خطأ في تشغيل البوت: {e}")
-        
-    if __name__ == "__main__":
-        run_bot()
+
+# === التشغيل الرئيسي (للتأكد من تشغيل البوت مباشرة على الخادم) ===
+if __name__ == "__main__":
+    # تم حذف كتلة if "streamlit" in sys.modules
+    run_bot()
+
