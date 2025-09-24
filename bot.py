@@ -6,7 +6,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    MessageHandler, filters, ContextTypes
 )
 from database import init_db, manage_courses, manage_years, manage_users
 import config
@@ -47,13 +47,23 @@ def register_user(user_id, username):
 
 # دالة للتحقق من انضمام المستخدم للقنوات
 async def check_all_channels(user_id, bot):
-    # وظيفة مؤقتة، يمكنك استبدالها بوظيفة التحقق الحقيقية
-    return True
+    return True # وظيفة مؤقتة
 
 # دالة للتعامل مع المستندات
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # وظيفة مؤقتة
-    await update.message.reply_text("تم استلام المستند.")
+    await update.message.reply_text("تم استلام المستند.") # وظيفة مؤقتة
+
+async def get_invite_link(bot, chat_id):
+    try:
+        chat = await bot.get_chat(chat_id)
+        if chat.username:
+            return f"https://t.me/{chat.username}"
+        else:
+            invite_link_obj = await bot.create_chat_invite_link(chat_id)
+            return invite_link_obj.invite_link
+    except Exception as e:
+        logger.error(f"Failed to get invite link for {chat_id}: {e}")
+        return None
 
 # === حالات المحادثة ===
 ADD_COURSE_STATE, REMOVE_COURSE_STATE, ADD_YEAR_STATE, REMOVE_YEAR_STATE, BAN_USER_STATE = range(5)
@@ -97,7 +107,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(y['name'], callback_data=f"year_{y['year_id']}")] for y in years]
     keyboard.append([InlineKeyboardButton("📊 الإحصائيات", callback_data="stats")])
 
-    # إضافة زر لوحة التحكم الإدارية للمديرين فقط
     if user_id in config.ADMIN_IDS:
         keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المدير", callback_data="admin_panel")])
     
@@ -109,12 +118,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
     
-    # التحقق من صلاحيات المدير
     if data.startswith("admin_") and user_id not in config.ADMIN_IDS:
         await query.message.reply_text("ليس لديك صلاحية الوصول إلى هذه الوظيفة.")
         return
     
-    # إدارة القنوات
     if data == "check_channels":
         if await check_all_channels(user_id, context.bot):
             await query.message.edit_text("شكرًا! يمكنك الآن استخدام البوت.")
@@ -123,7 +130,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("لم تنضم إلى جميع القنوات بعد!")
         return
 
-    # الإحصائيات
     if data == "stats":
         conn = get_db_connection()
         total = conn.execute("SELECT value FROM stats WHERE stat_name = 'total_users'").fetchone()
@@ -132,7 +138,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, parse_mode="Markdown")
         return
 
-    # لوحة تحكم المدير
     if data == "admin_panel":
         await query.message.edit_text("مرحباً أيها المدير! اختر من القائمة:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📚 إضافة مادة", callback_data="admin_add_course"), InlineKeyboardButton("🗑️ حذف مادة", callback_data="admin_remove_course")],
@@ -141,7 +146,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]))
         return
 
-    # أوامر إضافة وحذف
     if data == "admin_add_course":
         waiting_for_input[user_id] = "add_course"
         await query.message.edit_text("أرسل اسم المادة التي تريد إضافتها.")
@@ -187,7 +191,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(f"المستخدمون الحاليون:\n\n{user_list}")
         return
 
-    # تنفيذ أوامر الحذف
     if data.startswith("remove_course_"):
         course_id = int(data.split("_")[2])
         manage_courses(course_id=course_id, action="remove")
@@ -229,6 +232,11 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await update.message.reply_text("معرف المستخدم يجب أن يكون رقماً. يرجى المحاولة مرة أخرى.")
 
+# ---
+# A global flag to ensure the bot thread runs only once
+bot_thread_started = False
+# ---
+
 # === تشغيل البوت في خيط منفصل مع إدارة event loop ===
 def run_bot():
     init_db()
@@ -251,9 +259,14 @@ def run_bot():
 
 # === التشغيل التلقائي على Streamlit ===
 if "streamlit" in sys.modules:
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("✅ البوت يعمل في الخلفية على Streamlit.")
+    # ---
+    # Only start the bot thread if it hasn't been started yet
+    if not bot_thread_started:
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
+        bot_thread_started = True # Set the flag to True
+        logger.info("✅ البوت يعمل في الخلفية على Streamlit.")
+    # ---
 else:
     if __name__ == "__main__":
         run_bot()
