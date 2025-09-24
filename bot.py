@@ -8,7 +8,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
-from database import init_db
+from database import init_db, manage_courses, manage_years, manage_users
 import config
 import streamlit as st
 
@@ -45,16 +45,6 @@ def register_user(user_id, username):
     conn.commit()
     conn.close()
 
-async def check_all_channels(user_id, bot):
-    for ch in config.REQUIRED_CHANNELS:
-        try:
-            member = await bot.get_chat_member(ch, user_id)
-            if member.status not in ["member", "administrator", "creator"]:
-                return False
-        except:
-            return False
-    return True
-
 # === المعالجات ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -65,6 +55,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لقد تم حظرك من استخدام هذا البوت.")
         return
     register_user(user_id, update.effective_user.username)
+
+    # تحقق من القنوات المطلوبة
     if config.REQUIRED_CHANNELS and user_id not in config.ADMIN_IDS:
         if not await check_all_channels(user_id, context.bot):
             buttons = []
@@ -81,6 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
             return
+
     conn = get_db_connection()
     years = conn.execute("SELECT * FROM years").fetchall()
     conn.close()
@@ -113,67 +106,79 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, parse_mode="Markdown")
         return
 
-    if data.startswith("year_"):
-        year_id = int(data.split("_")[1])
+    if data == "admin_panel":
+        # عرض لوحة تحكم إدارية لأوامر مثل إضافة وحذف المواد
+        await query.message.edit_text("إليك لوحة التحكم الإدارية.", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 إضافة مادة", callback_data="add_course")],
+            [InlineKeyboardButton("🗑️ حذف مادة", callback_data="remove_course")],
+            [InlineKeyboardButton("📝 إضافة سنة دراسية", callback_data="add_year")],
+            [InlineKeyboardButton("🗑️ حذف سنة دراسية", callback_data="remove_year")],
+            [InlineKeyboardButton("🚫 حظر مستخدم", callback_data="ban_user")],
+            [InlineKeyboardButton("👥 عرض المستخدمين", callback_data="view_users")],
+        ]))
+        return
+
+    if data == "add_course":
+        await query.message.edit_text("أرسل اسم المادة التي تريد إضافتها.")
+        return
+
+    if data == "remove_course":
         conn = get_db_connection()
-        terms = conn.execute("SELECT * FROM terms WHERE year_id = ?", (year_id,)).fetchall()
+        courses = conn.execute("SELECT * FROM courses").fetchall()
         conn.close()
-        if not terms:
-            await query.message.reply_text("لا توجد ترمات لهذه السنة.")
-            return
-        keyboard = [[InlineKeyboardButton(t['name'], callback_data=f"term_{t['term_id']}")] for t in terms]
-        keyboard.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_years")])
-        await query.message.edit_text("اختر الترم:", reply_markup=InlineKeyboardMarkup(keyboard))
+        buttons = [
+            [InlineKeyboardButton(course['name'], callback_data=f"remove_course_{course['course_id']}")]
+            for course in courses
+        ]
+        await query.message.edit_text("اختر المادة التي تريد حذفها:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if data.startswith("term_"):
-        term_id = int(data.split("_")[1])
+    if data == "add_year":
+        await query.message.edit_text("أرسل اسم السنة الدراسية التي تريد إضافتها.")
+        return
+
+    if data == "remove_year":
         conn = get_db_connection()
-        courses = conn.execute("SELECT * FROM courses WHERE term_id = ?", (term_id,)).fetchall()
+        years = conn.execute("SELECT * FROM years").fetchall()
         conn.close()
-        if not courses:
-            await query.message.reply_text("لا توجد مواد لهذا الترم.")
-            return
-        keyboard = [[InlineKeyboardButton(c['name'], callback_data=f"course_{c['course_id']}")] for c in courses]
-        keyboard.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_terms")])
-        await query.message.edit_text("اختر المادة:", reply_markup=InlineKeyboardMarkup(keyboard))
+        buttons = [
+            [InlineKeyboardButton(year['name'], callback_data=f"remove_year_{year['year_id']}")]
+            for year in years
+        ]
+        await query.message.edit_text("اختر السنة الدراسية التي تريد حذفها:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    if data.startswith("course_"):
-        course_id = int(data.split("_")[1])
+    if data == "ban_user":
+        await query.message.edit_text("أرسل معرف المستخدم الذي تريد حظره.")
+        return
+
+    if data == "view_users":
         conn = get_db_connection()
-        files = conn.execute("SELECT * FROM files WHERE course_id = ?", (course_id,)).fetchall()
+        users = conn.execute("SELECT * FROM users").fetchall()
         conn.close()
-        if not files:
-            await query.message.reply_text("لا توجد ملفات لهذه المادة.")
-            return
-        for f in files:
-            await context.bot.send_document(
-                chat_id=query.message.chat_id,
-                document=f['telegram_file_id'],
-                caption=f['name']
-            )
+        text = "\n".join([f"@{user['username']}" for user in users])
+        await query.message.edit_text(f"المستخدمون الحاليون:\n{text}")
         return
 
-    if data == "back_to_years":
-        await start(update, context)
+    # حذف مادة أو سنة دراسية
+    if data.startswith("remove_course_"):
+        course_id = int(data.split("_")[2])
+        manage_courses(course_id, action="remove")
+        await query.message.edit_text("تم حذف المادة بنجاح.")
         return
 
-# === أوامر إدارية بسيطة (للتوضيح) ===
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in config.ADMIN_IDS:
-        await update.message.reply_text("غير مصرح لك!")
+    if data.startswith("remove_year_"):
+        year_id = int(data.split("_")[2])
+        manage_years(year_id, action="remove")
+        await query.message.edit_text("تم حذف السنة الدراسية بنجاح.")
         return
-    await update.message.reply_text("مرحباً أيها المدير! (الوظائف الكاملة تحتاج توسيع)")
 
-# === رفع ملفات (للإداريين) ===
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in config.ADMIN_IDS:
+    # حظر المستخدم
+    if data == "ban_user":
+        user_id = int(data.split("_")[2])
+        manage_users(user_id, action="ban")
+        await query.message.edit_text(f"تم حظر المستخدم @ {user_id}.")
         return
-    # هنا يمكنك إضافة منطق ربط الملف بمادة معينة
-    await update.message.reply_text("تم استلام الملف. (الربط بالمادة: قيد التطوير)")
 
 # === تشغيل البوت في خيط منفصل مع إدارة event loop ===
 def run_bot():
@@ -186,7 +191,7 @@ def run_bot():
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("admin", button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_handler))
 
